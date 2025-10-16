@@ -354,78 +354,109 @@ function renderPlaylists(){
   listDiv.appendChild(wrap);
 }
 function renderList(){
+  // reset UI
   listDiv.innerHTML = '';
-  if (mode==='channels') renderCategories(); else catBar.innerHTML = '';
-// Barre d'action spécifique à l'historique
-if (mode === 'history') {
-  const bar = document.createElement('div');
-  div.setAttribute('data-url', (item && item.url) ? item.url : '');
-bar.className = 'history-toolbar';
-  bar.innerHTML = `
-    <button id="btnClearHistory" class="btn-danger" title="Effacer tout l'historique">🧹 Effacer l'historique</button>
-  `;
-  bar.querySelector('#btnClearHistory').onclick = () => {
-    if (confirm('Effacer tout l’historique ?')) clearHistory();
-  };
-  listDiv.appendChild(bar);
-  try { pingVisibleList(6); } catch(e){}
+  if (mode === 'channels') { 
+    renderCategories(); 
+  } else { 
+    catBar.innerHTML = ''; 
+  }
 
-}
+  // --- Barre outils de l'historique ---
+  if (mode === 'history') {
+    const bar = document.createElement('div');
+    bar.className = 'history-toolbar';
+    bar.innerHTML = `
+      <button id="btnClearHistory" class="btn-danger" title="Effacer tout l'historique">🧹 Effacer l'historique</button>
+    `;
+    bar.querySelector('#btnClearHistory').onclick = () => {
+      if (confirm('Effacer tout l’historique ?')) clearHistory();
+    };
+    listDiv.appendChild(bar);
+  }
 
+  // --- Source de données ---
   let data = [];
-  if (mode==='channels') data = channels;
-  if (mode==='favorites') data = favorites;
-  if (mode==='history') data = historyList.map(u => ({url:u, name:u}));
-  if (mode==='playlists') { renderPlaylists(); return; }
+  if (mode === 'channels')  data = channels;
+  if (mode === 'favorites') data = favorites;
+  if (mode === 'history')   data = historyList.map(u => ({ url: u, name: u }));
+  if (mode === 'playlists') { renderPlaylists(); return; }
 
-  if (mode==='channels' && categoryFilter!=='ALL') data = data.filter(x=>x.group===categoryFilter);
-  if (channelFilter) data = data.filter(x => (x.name||x.url).toLowerCase().includes(channelFilter.toLowerCase()));
+  if (mode === 'channels' && categoryFilter !== 'ALL') {
+    data = data.filter(x => x.group === categoryFilter);
+  }
+  if (channelFilter) {
+    data = data.filter(x => (x.name || x.url).toLowerCase().includes(channelFilter.toLowerCase()));
+  }
 
-  data.forEach(item=>{
+  // --- Rendu des items ---
+  data.forEach(item => {
     const div = document.createElement('div');
     div.className = 'item';
+    const title = item.name || item.url;
+    const group = item.group || '';
+    const logo  = item.logo || '';
+
+    div.setAttribute('data-url', item.url || '');
     div.innerHTML = `
       <div class="left">
-        <span class="logo-sm">${renderLogo(item.logo)}</span>
+        <span class="logo-sm">${renderLogo(logo)}</span>
         <div class="meta">
-          <div class="name">${escapeHtml(item.name||item.url)}</div>
-          ${ item.group ? `<div class="sub" style="font-size:.8em;opacity:.7">${escapeHtml(item.group)}</div>` : '' }
+          <div class="name">${escapeHtml(title)}</div>
+          ${ group ? `<div class="sub" style="font-size:.8em;opacity:.7">${escapeHtml(group)}</div>` : '' }
         </div>
       </div>
       <span class="star">${isFav(item.url) ? '★' : '☆'}</span>
     `;
+
+    // ---- CLICK: comportement identique à "Favoris"
     div.onclick = () => {
-  const ps = document.getElementById('playerSection');
-  const noSource = document.getElementById('noSource');
-  try { resetPlayers(); } catch(_){}
-  if (noSource) noSource.style.display = 'none';
-  if (ps) ps.classList.add('playing');
+      const ps = document.getElementById('playerSection');
+      const noSource = document.getElementById('noSource');
+      try { resetPlayers(); } catch(_){}
+      if (noSource) noSource.style.display = 'none';
+      if (ps) ps.classList.add('playing');
 
-  playByType(item.url);
-  try { updateNowBar(item.name || item.url, item.url); } catch(_){}
-  try { if (typeof addHistory === 'function') addHistory(item.url); } catch(_){}
+      playByType(item.url);
+      try { updateNowBar(title, item.url); } catch(_){}
+      try { if (typeof addHistory === 'function') addHistory(item.url); } catch(_){}
 
-  // Nudge autoplay si <video> est active
-  try {
-    const v = document.getElementById('videoPlayer');
-    if (v && v.style.display === 'block') {
-      v.muted = true;
-      const p = v.play();
-      if (p && p.catch) p.catch(() => {});
+      // Nudge autoplay si <video> est active
+      try {
+        const v = document.getElementById('videoPlayer');
+        if (v && v.style.display === 'block') {
+          v.muted = true;
+          const p = v.play();
+          if (p && p.catch) p.catch(() => {});
+        }
+      } catch(_){}
+    };
+
+    // ---- Favoris (sans déclencher la lecture)
+    const star = div.querySelector('.star');
+    if (star) {
+      star.onclick = (e) => {
+        e.stopPropagation();
+        toggleFavorite(item);
+        renderList();
+      };
     }
-  } catch(_){}
-      addHistory(item.url);
-    };
-    div.querySelector('.star').onclick = (e)=>{
-      e.stopPropagation();
-      toggleFavorite(item);
-      renderList();
-    };
+
     listDiv.appendChild(div);
   });
 
-  if (!data.length) listDiv.innerHTML = '<p style="opacity:.6;padding:10px;">Aucune donnée.</p>';
+  // Ping des liens visibles (optionnel)
+  try {
+    if (typeof pingVisibleList === 'function' && (mode === 'channels' || mode === 'history')) {
+      pingVisibleList(6);
+    }
+  } catch(_){}
+
+  if (!data.length) {
+    listDiv.innerHTML += '<p style="opacity:.6;padding:10px;">Aucune donnée.</p>';
+  }
 }
+
 
 // --- Tabs ---
 function switchTab(t){
