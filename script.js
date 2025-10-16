@@ -75,13 +75,24 @@ function setPlaying(on){
   } catch {}
 }
 function resetPlayers(){
-  try { video.pause(); } catch {}
-  try { audio.pause(); } catch {}
-  video.style.display = 'none';
-  audio.style.display = 'none';
-  iframe.style.display = 'none';
-  setPlaying(false);
+  const ps = document.getElementById('playerSection');
+  const v  = document.getElementById('videoPlayer');
+  const yt = document.getElementById('ytPlayer');
+  const au = document.getElementById('audioPlayer');
+
+  try { if (window.currentHls) { window.currentHls.destroy(); window.currentHls = null; } } catch(e){}
+  try { if (window.currentDash){ window.currentDash.reset();  window.currentDash = null; } } catch(e){}
+
+  [v, yt, au].forEach(el => {
+    if (!el) return;
+    try { if (el.tagName === 'VIDEO') el.pause(); } catch(_){}
+    try { if (el.tagName === 'IFRAME') el.src = ''; else el.removeAttribute('src'); } catch(_){}
+    el.style.display = 'none';
+  });
+
+  if (ps) ps.classList.remove('playing');
 }
+
 function updateNowBar(nameOrUrl, url){
   nowTitle && (nowTitle.textContent = nameOrUrl || url || 'Flux');
   if (openBtn) openBtn.href = url || '#';
@@ -141,13 +152,81 @@ function playYouTube(url){
   updateNowBar(undefined, url);
 }
 function playByType(url){
-  const t = classify(url);
-  if (t==='youtube') return playYouTube(url);
-  if (t==='mp4') return playVideo(url);
-  if (t==='mp3') return playAudio(url);
-  if (t==='dash') return playDash(url);
-  return playHls(url);
+  const v  = document.getElementById('videoPlayer');
+  const yt = document.getElementById('ytPlayer');
+  const au = document.getElementById('audioPlayer');
+  const ps = document.getElementById('playerSection');
+
+  const u = (url||'').trim();
+  const isYouTube = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(u);
+  const isMP3 = /\.mp3($|\?)/i.test(u);
+  const isMP4 = /\.mp4($|\?)/i.test(u);
+  const isHLS = /\.m3u8($|\?)/i.test(u);
+  const isDASH= /\.mpd($|\?)/i.test(u);
+
+  function showPlaying(){ if (ps) ps.classList.add('playing'); }
+
+  // YouTube (iframe)
+  if (isYouTube && yt){
+    yt.src = u.replace('watch?v=','embed/').replace('&t=','?start=');
+    yt.allow = 'autoplay; encrypted-media; picture-in-picture';
+    yt.style.display = 'block';
+    showPlaying(); return;
+  }
+
+  // Audio MP3
+  if (isMP3 && au){
+    au.src = u;
+    au.style.display = 'block';
+    try { au.play().catch(()=>{}); } catch(_){}
+    showPlaying(); return;
+  }
+
+  // MP4 direct
+  if (isMP4 && v){
+    v.src = u;
+    v.style.display = 'block';
+    try { v.muted = true; v.play().catch(()=>{}); } catch(_){}
+    showPlaying(); return;
+  }
+
+  // HLS (m3u8)
+  if (isHLS && v){
+    v.style.display = 'block';
+    if (window.Hls && window.Hls.isSupported()){
+      try {
+        const hls = new Hls({ enableWorker: true });
+        window.currentHls = hls;
+        hls.attachMedia(v);
+        hls.on(Hls.Events.MEDIA_ATTACHED, () => hls.loadSource(u));
+      } catch(_){}
+    } else {
+      v.src = u; // Safari natif
+    }
+    try { v.muted = true; v.play().catch(()=>{}); } catch(_){}
+    showPlaying(); return;
+  }
+
+  // DASH (mpd)
+  if (isDASH && v && window.dashjs){
+    v.style.display = 'block';
+    try {
+      const p = dashjs.MediaPlayer().create();
+      window.currentDash = p;
+      p.initialize(v, u, true);
+    } catch(_){}
+    showPlaying(); return;
+  }
+
+  // fallback → tente dans la <video>
+  if (v){
+    v.src = u;
+    v.style.display = 'block';
+    try { v.muted = true; v.play().catch(()=>{}); } catch(_){}
+    showPlaying();
+  }
 }
+
 
 // --- M3U ---
 function parseM3U(text){
@@ -316,17 +395,25 @@ bar.className = 'history-toolbar';
       <span class="star">${isFav(item.url) ? '★' : '☆'}</span>
     `;
     div.onclick = () => {
-      try { resetPlayers(); } catch {}
-      if (noSource) noSource.style.display = 'none';
-      playByType(item.url);
-      updateNowBar(item.name || item.url, item.url);
-      try {
-        if (video && video.style.display === 'block') {
-          video.muted = false;            // anti-autoplay
-          const p = video.play();
-          if (p && p.catch) p.catch(()=>{});
-        }
-      } catch {}
+  const ps = document.getElementById('playerSection');
+  const noSource = document.getElementById('noSource');
+  try { resetPlayers(); } catch(_){}
+  if (noSource) noSource.style.display = 'none';
+  if (ps) ps.classList.add('playing');
+
+  playByType(item.url);
+  try { updateNowBar(item.name || item.url, item.url); } catch(_){}
+  try { if (typeof addHistory === 'function') addHistory(item.url); } catch(_){}
+
+  // Nudge autoplay si <video> est active
+  try {
+    const v = document.getElementById('videoPlayer');
+    if (v && v.style.display === 'block') {
+      v.muted = true;
+      const p = v.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+  } catch(_){}
       addHistory(item.url);
     };
     div.querySelector('.star').onclick = (e)=>{
