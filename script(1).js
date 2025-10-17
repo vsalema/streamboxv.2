@@ -75,13 +75,24 @@ function setPlaying(on){
   } catch {}
 }
 function resetPlayers(){
-  try { video.pause(); } catch {}
-  try { audio.pause(); } catch {}
-  video.style.display = 'none';
-  audio.style.display = 'none';
-  iframe.style.display = 'none';
-  setPlaying(false);
+  const ps = document.getElementById('playerSection');
+  const v  = document.getElementById('videoPlayer');
+  const yt = document.getElementById('ytPlayer');
+  const au = document.getElementById('audioPlayer');
+
+  try { if (window.currentHls) { window.currentHls.destroy(); window.currentHls = null; } } catch(e){}
+  try { if (window.currentDash){ window.currentDash.reset();  window.currentDash = null; } } catch(e){}
+
+  [v, yt, au].forEach(el => {
+    if (!el) return;
+    try { if (el.tagName === 'VIDEO') el.pause(); } catch(_){}
+    try { if (el.tagName === 'IFRAME') el.src = ''; else el.removeAttribute('src'); } catch(_){}
+    el.style.display = 'none';
+  });
+
+  if (ps) ps.classList.remove('playing');
 }
+
 function updateNowBar(nameOrUrl, url){
   nowTitle && (nowTitle.textContent = nameOrUrl || url || 'Flux');
   if (openBtn) openBtn.href = url || '#';
@@ -141,13 +152,81 @@ function playYouTube(url){
   updateNowBar(undefined, url);
 }
 function playByType(url){
-  const t = classify(url);
-  if (t==='youtube') return playYouTube(url);
-  if (t==='mp4') return playVideo(url);
-  if (t==='mp3') return playAudio(url);
-  if (t==='dash') return playDash(url);
-  return playHls(url);
+  const v  = document.getElementById('videoPlayer');
+  const yt = document.getElementById('ytPlayer');
+  const au = document.getElementById('audioPlayer');
+  const ps = document.getElementById('playerSection');
+
+  const u = (url||'').trim();
+  const isYouTube = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(u);
+  const isMP3 = /\.mp3($|\?)/i.test(u);
+  const isMP4 = /\.mp4($|\?)/i.test(u);
+  const isHLS = /\.m3u8($|\?)/i.test(u);
+  const isDASH= /\.mpd($|\?)/i.test(u);
+
+  function showPlaying(){ if (ps) ps.classList.add('playing'); }
+
+  // YouTube (iframe)
+  if (isYouTube && yt){
+    yt.src = u.replace('watch?v=','embed/').replace('&t=','?start=');
+    yt.allow = 'autoplay; encrypted-media; picture-in-picture';
+    yt.style.display = 'block';
+    showPlaying(); return;
+  }
+
+  // Audio MP3
+  if (isMP3 && au){
+    au.src = u;
+    au.style.display = 'block';
+    try { au.play().catch(()=>{}); } catch(_){}
+    showPlaying(); return;
+  }
+
+  // MP4 direct
+  if (isMP4 && v){
+    v.src = u;
+    v.style.display = 'block';
+    try { v.muted = false; v.play().catch(()=>{}); } catch(_){}
+    showPlaying(); return;
+  }
+
+  // HLS (m3u8)
+  if (isHLS && v){
+    v.style.display = 'block';
+    if (window.Hls && window.Hls.isSupported()){
+      try {
+        const hls = new Hls({ enableWorker: true });
+        window.currentHls = hls;
+        hls.attachMedia(v);
+        hls.on(Hls.Events.MEDIA_ATTACHED, () => hls.loadSource(u));
+      } catch(_){}
+    } else {
+      v.src = u; // Safari natif
+    }
+    try { v.muted = false; v.play().catch(()=>{}); } catch(_){}
+    showPlaying(); return;
+  }
+
+  // DASH (mpd)
+  if (isDASH && v && window.dashjs){
+    v.style.display = 'block';
+    try {
+      const p = dashjs.MediaPlayer().create();
+      window.currentDash = p;
+      p.initialize(v, u, true);
+    } catch(_){}
+    showPlaying(); return;
+  }
+
+  // fallback → tente dans la <video>
+  if (v){
+    v.src = u;
+    v.style.display = 'block';
+    try { v.muted = false; v.play().catch(()=>{}); } catch(_){}
+    showPlaying();
+  }
 }
+
 
 // --- M3U ---
 function parseM3U(text){
@@ -275,67 +354,109 @@ function renderPlaylists(){
   listDiv.appendChild(wrap);
 }
 function renderList(){
+  // reset UI
   listDiv.innerHTML = '';
-  if (mode==='channels') renderCategories(); else catBar.innerHTML = '';
-// Barre d'action spécifique à l'historique
-if (mode === 'history') {
-  const bar = document.createElement('div');
-  bar.className = 'history-toolbar';
-  bar.innerHTML = `
-    <button id="btnClearHistory" class="btn-danger" title="Effacer tout l'historique">🧹 Effacer l'historique</button>
-  `;
-  bar.querySelector('#btnClearHistory').onclick = () => {
-    if (confirm('Effacer tout l’historique ?')) clearHistory();
-  };
-  listDiv.appendChild(bar);
-}
+  if (mode === 'channels') { 
+    renderCategories(); 
+  } else { 
+    catBar.innerHTML = ''; 
+  }
 
+  // --- Barre outils de l'historique ---
+  if (mode === 'history') {
+    const bar = document.createElement('div');
+    bar.className = 'history-toolbar';
+    bar.innerHTML = `
+      <button id="btnClearHistory" class="btn-danger" title="Effacer tout l'historique">🧹 Effacer l'historique</button>
+    `;
+    bar.querySelector('#btnClearHistory').onclick = () => {
+      if (confirm('Effacer tout l’historique ?')) clearHistory();
+    };
+    listDiv.appendChild(bar);
+  }
+
+  // --- Source de données ---
   let data = [];
-  if (mode==='channels') data = channels;
-  if (mode==='favorites') data = favorites;
-  if (mode==='history') data = historyList.map(u => ({url:u, name:u}));
-  if (mode==='playlists') { renderPlaylists(); return; }
+  if (mode === 'channels')  data = channels;
+  if (mode === 'favorites') data = favorites;
+  if (mode === 'history')   data = historyList.map(u => ({ url: u, name: u }));
+  if (mode === 'playlists') { renderPlaylists(); return; }
 
-  if (mode==='channels' && categoryFilter!=='ALL') data = data.filter(x=>x.group===categoryFilter);
-  if (channelFilter) data = data.filter(x => (x.name||x.url).toLowerCase().includes(channelFilter.toLowerCase()));
+  if (mode === 'channels' && categoryFilter !== 'ALL') {
+    data = data.filter(x => x.group === categoryFilter);
+  }
+  if (channelFilter) {
+    data = data.filter(x => (x.name || x.url).toLowerCase().includes(channelFilter.toLowerCase()));
+  }
 
-  data.forEach(item=>{
+  // --- Rendu des items ---
+  data.forEach(item => {
     const div = document.createElement('div');
     div.className = 'item';
+    const title = item.name || item.url;
+    const group = item.group || '';
+    const logo  = item.logo || '';
+
+    div.setAttribute('data-url', item.url || '');
     div.innerHTML = `
       <div class="left">
-        <span class="logo-sm">${renderLogo(item.logo)}</span>
+        <span class="logo-sm">${renderLogo(logo)}</span>
         <div class="meta">
-          <div class="name">${escapeHtml(item.name||item.url)}</div>
-          ${ item.group ? `<div class="sub" style="font-size:.8em;opacity:.7">${escapeHtml(item.group)}</div>` : '' }
+          <div class="name">${escapeHtml(title)}</div>
+          ${ group ? `<div class="sub" style="font-size:.8em;opacity:.7">${escapeHtml(group)}</div>` : '' }
         </div>
       </div>
       <span class="star">${isFav(item.url) ? '★' : '☆'}</span>
     `;
+
+    // ---- CLICK: comportement identique à "Favoris"
     div.onclick = () => {
-      try { resetPlayers(); } catch {}
+      const ps = document.getElementById('playerSection');
+      const noSource = document.getElementById('noSource');
+      try { resetPlayers(); } catch(_){}
       if (noSource) noSource.style.display = 'none';
+      if (ps) ps.classList.add('playing');
+
       playByType(item.url);
-      updateNowBar(item.name || item.url, item.url);
+      try { updateNowBar(title, item.url); } catch(_){}
+      try { if (typeof addHistory === 'function') addHistory(item.url); } catch(_){}
+
+      // Nudge autoplay si <video> est active
       try {
-        if (video && video.style.display === 'block') {
-          video.muted = false;            // anti-autoplay
-          const p = video.play();
-          if (p && p.catch) p.catch(()=>{});
+        const v = document.getElementById('videoPlayer');
+        if (v && v.style.display === 'block') {
+          v.muted = false;
+          const p = v.play();
+          if (p && p.catch) p.catch(() => {});
         }
-      } catch {}
-      addHistory(item.url);
+      } catch(_){}
     };
-    div.querySelector('.star').onclick = (e)=>{
-      e.stopPropagation();
-      toggleFavorite(item);
-      renderList();
-    };
+
+    // ---- Favoris (sans déclencher la lecture)
+    const star = div.querySelector('.star');
+    if (star) {
+      star.onclick = (e) => {
+        e.stopPropagation();
+        toggleFavorite(item);
+        renderList();
+      };
+    }
+
     listDiv.appendChild(div);
   });
 
-  if (!data.length) listDiv.innerHTML = '<p style="opacity:.6;padding:10px;">Aucune donnée.</p>';
+  // Ping des liens visibles (optionnel)
+  try {
+    if (typeof pingVisibleList === 'function' && (mode === 'channels' || mode === 'history')) {
+      pingVisibleList(6);
+    }
+  } catch(_){}
+
+  if (!data.length) {
+    listDiv.innerHTML += '<p style="opacity:.6;padding:10px;">Aucune donnée.</p>';
+  }
 }
+
 
 // --- Tabs ---
 function switchTab(t){
@@ -1160,4 +1281,322 @@ function highlightCurrentSubs(){
   }
 })();
 
+// === NowBar FS fix — reconstruit 2 boutons distincts & handlers propres ===
+(function fixNowBarFS(){
+  var nowBar = document.getElementById('nowBar');
+  if (!nowBar) return;
+  var actions = nowBar.querySelector('.nowbar-actions') || nowBar;
+
+  // 1) Supprime tous les anciens boutons FS (doublons/handlers fantômes)
+  Array.prototype.slice.call(actions.querySelectorAll('#fsBtn, #fsPageBtn')).forEach(function(b){ b.remove(); });
+  Array.prototype.slice.call(actions.querySelectorAll('button, a')).forEach(function(b){
+    var t = (b.textContent || '').trim();
+    var ttl = (b.title || '').toLowerCase();
+    var looksFS = (t === '⤢' || t === '⤡' || t === '🗖' || t === '🗗' || ttl.indexOf('plein écran') !== -1);
+    if (looksFS && !b.id) b.remove();
+  });
+
+  // 2) Crée deux nouveaux boutons "neufs" (aucun listener hérité)
+  var fsVideoBtn = document.createElement('button');
+  fsVideoBtn.id = 'fsBtn';
+  fsVideoBtn.title = 'Plein écran (vidéo)';
+  fsVideoBtn.textContent = '⤢';
+  fsVideoBtn.style.minWidth = '38px';
+
+  var fsPageBtn = document.createElement('button');
+  fsPageBtn.id = 'fsPageBtn';
+  fsPageBtn.title = 'Plein écran (page)';
+  fsPageBtn.textContent = '🗖';
+  fsPageBtn.style.minWidth = '38px';
+
+  actions.appendChild(fsVideoBtn);
+  actions.appendChild(fsPageBtn);
+
+  // 3) Handlers distincts
+  var doc = document;
+  var docEl = document.documentElement;
+  var videoEl = document.getElementById('videoPlayer');
+  var playerSection = document.getElementById('playerSection');
+
+  function isFS(){ return !!(doc.fullscreenElement || doc.webkitFullscreenElement); }
+  function currentFSTarget(){ return doc.fullscreenElement || doc.webkitFullscreenElement || null; }
+
+  function setLabels(){
+    var tgt = currentFSTarget();
+    var videoFs = (tgt === videoEl || tgt === playerSection);
+    var pageFs  = (tgt === docEl || tgt === doc.body);
+
+    // Vidéo: ⤢ entrer / ⤡ quitter
+    fsVideoBtn.textContent = videoFs ? '⤡' : '⤢';
+    fsVideoBtn.title = videoFs ? 'Quitter plein écran (vidéo)' : 'Plein écran (vidéo)';
+
+    // Page: 🗖 entrer / 🗗 quitter
+    fsPageBtn.textContent = pageFs ? '🗗' : '🗖';
+    fsPageBtn.title = pageFs ? 'Quitter plein écran (page)' : 'Plein écran (page)';
+  }
+
+  function targetForVideoFS(){
+    // Si la <video> est visible, on la cible; sinon, le conteneur player
+    if (videoEl && videoEl.style && videoEl.style.display === 'block') return videoEl;
+    return playerSection || videoEl || docEl;
+  }
+
+  fsVideoBtn.onclick = function(e){
+    e.stopPropagation();
+    try {
+      // iOS Safari: plein écran natif de la vidéo si possible (n'affecte pas la page)
+      if (videoEl && typeof videoEl.webkitEnterFullscreen === 'function' && !isFS()) {
+        videoEl.webkitEnterFullscreen();
+        setLabels();
+        return;
+      }
+      if (isFS()) {
+        (doc.exitFullscreen ? doc.exitFullscreen() : doc.webkitExitFullscreen && doc.webkitExitFullscreen());
+      } else {
+        var tgt = targetForVideoFS();
+        if (tgt.requestFullscreen) tgt.requestFullscreen();
+        else if (tgt.webkitRequestFullscreen) tgt.webkitRequestFullscreen();
+      }
+    } catch(_) {}
+    setLabels();
+  };
+
+  fsPageBtn.onclick = function(e){
+    e.stopPropagation();
+    try {
+      if (isFS()) {
+        (doc.exitFullscreen ? doc.exitFullscreen() : doc.webkitExitFullscreen && doc.webkitExitFullscreen());
+      } else {
+        if (docEl.requestFullscreen) docEl.requestFullscreen();
+        else if (docEl.webkitRequestFullscreen) docEl.webkitRequestFullscreen();
+      }
+    } catch(_) {}
+    setLabels();
+  };
+
+  doc.addEventListener('fullscreenchange', setLabels);
+  doc.addEventListener('webkitfullscreenchange', setLabels);
+  setLabels();
+})();
+
+
+
+/* ===== PING des liens (HEAD/GET avec timeout & badge UI) ===== */
+function pingUrl(url, timeoutMs){
+  return new Promise(function(resolve){
+    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var t = setTimeout(function(){ try{ ctrl && ctrl.abort(); }catch(_){ } resolve({state:'timeout', status:0, ms:timeoutMs}); }, timeoutMs||5000);
+    var t0 = Date.now();
+    fetch(url, { method:'HEAD', signal: ctrl?ctrl.signal:undefined, cache:'no-store' })
+      .then(function(r){
+        clearTimeout(t);
+        resolve({ state:(r.ok?'ok':(r.status>=400?'bad':'warn')), status:r.status, ms:Date.now()-t0 });
+      })
+      .catch(function(){
+        var ctrl2 = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        var t2 = setTimeout(function(){ try{ ctrl2 && ctrl2.abort(); }catch(_){ } resolve({state:'timeout', status:0, ms:(Date.now()-t0)}); }, timeoutMs||5000);
+        fetch(url, { method:'GET', signal: ctrl2?ctrl2.signal:undefined, cache:'no-store', mode:'no-cors' })
+          .then(function(r){
+            clearTimeout(t2);
+            var st = (typeof r.status === 'number' ? r.status : 0);
+            var state = r.ok ? 'ok' : (st>=400 ? 'bad' : 'warn');
+            resolve({ state: state, status: st, ms:Date.now()-t0 });
+          })
+          .catch(function(){
+            resolve({ state:'bad', status:0, ms:Date.now()-t0 });
+          });
+      });
+  });
+}
+function pingVisibleList(concurrency){
+  var list = document.getElementById('list');
+  if (!list) return;
+  var items = list.querySelectorAll('.item');
+  var max = concurrency || 6;
+  var q = [];
+  for (var i=0;i<items.length;i++){
+    (function(div){
+      var url = div.getAttribute('data-url');
+      if (!url) return;
+      var badge = div.querySelector('.ping-badge');
+      if (!badge) {
+        var left = div.querySelector('.left') || div;
+        badge = document.createElement('span'); badge.className = 'ping-badge ping-spin'; badge.title = 'Vérification…';
+        left.appendChild(badge);
+      } else {
+        badge.className = 'ping-badge ping-spin'; badge.title = 'Vérification…';
+      }
+      q.push({div:div, url:url, badge:badge});
+    })(items[i]);
+  }
+  var idx = 0, active = 0;
+  function next(){
+    if (idx >= q.length) return;
+    while (active < max && idx < q.length){
+      (function(job){
+        idx++; active++;
+        pingUrl(job.url, 5000).then(function(res){
+          job.badge.classList.remove('ping-spin','ping-ok','ping-warn','ping-bad');
+          var cls = 'ping-warn', tt = 'Inconnu';
+          if (res.state === 'ok')   { cls='ping-ok';   tt='OK ' + res.status + ' ('+res.ms+'ms)'; }
+          else if (res.state === 'bad'){ cls='ping-bad';  tt='Erreur ' + res.status + ' ('+res.ms+'ms)'; }
+          else if (res.state === 'timeout'){ cls='ping-bad'; tt='Timeout ('+res.ms+'ms)'; }
+          else { cls='ping-warn'; tt='Peut-être OK (CORS) ('+res.ms+'ms)'; }
+          job.badge.classList.add(cls);
+          job.badge.title = tt;
+        }).catch(function(){ })
+        .finally(function(){ active--; next(); });
+      })(q[idx]);
+    }
+  }
+  next();
+}
+(function attachVerifyButton(){
+  var tabs = document.querySelector('.tabs');
+  if (!tabs) return;
+  if (document.getElementById('btnVerifyLinks')) return;
+  var btn = document.createElement('button');
+  btn.id = 'btnVerifyLinks';
+  btn.textContent = 'Vérifier les liens';
+  btn.title = 'Ping des liens visibles';
+  btn.style.margin = '6px';
+  btn.onclick = function(){ pingVisibleList(6); };
+  tabs.parentNode.insertBefore(btn, tabs.nextSibling);
+})();
+
+
+/* ===== Stats overlay (codec, résolution, fps, bitrate, buffer) ===== */
+(function StatsOverlay(){
+  var video = document.getElementById('videoPlayer');
+  var player = document.getElementById('playerSection');
+  if (!video || !player) return;
+  var actions = document.querySelector('#nowBar .nowbar-actions') || document.getElementById('nowBar');
+  if (actions && !document.getElementById('statsBtn')) {
+    var sb = document.createElement('button');
+    sb.id = 'statsBtn'; sb.textContent = 'ℹ️ Stats'; sb.title = 'Afficher/Masquer les stats';
+    actions.appendChild(sb);
+    sb.onclick = function(e){ e.stopPropagation(); toggleStats(); };
+  }
+  var box = document.getElementById('statsOverlay');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'statsOverlay'; box.className = 'hidden';
+    player.appendChild(box);
+  }
+  var timer = null, lastFrames = 0, lastTs = 0;
+  function toggleStats(){ if (box.classList.contains('hidden')) start(); else stop(); }
+  function start(){ box.classList.remove('hidden'); lastFrames=0; lastTs=0; if (timer) clearInterval(timer); timer=setInterval(update,1000); update(); }
+  function stop(){ box.classList.add('hidden'); if (timer){ clearInterval(timer); timer=null; } }
+  function formatBitrate(bps){ if (!bps||bps<=0) return '-'; var kb=bps/1000; if (kb<1000) return Math.round(kb)+' kb/s'; return (kb/1000).toFixed(2)+' Mb/s'; }
+  function getBuffer(){ try{ var ct=video.currentTime, buf=0; for (var i=0;i<video.buffered.length;i++){ var a=video.buffered.start(i), b=video.buffered.end(i); if (ct>=a&&ct<=b){ buf=b-ct; break; } } return buf; }catch(e){ return 0; } }
+  function getFPS(){
+    try {
+      if (video.getVideoPlaybackQuality) {
+        var q = video.getVideoPlaybackQuality();
+        var frames = q.totalVideoFrames || 0;
+        var now = performance.now();
+        if (!lastTs) { lastTs = now; lastFrames = frames; return 0; }
+        var fps = (frames - lastFrames) * 1000 / (now - lastTs);
+        lastTs = now; lastFrames = frames;
+        return Math.max(0, Math.round(fps));
+      }
+    } catch(e){}
+    return 0;
+  }
+  function getHLStats(){
+    try {
+      if (window.currentHls) {
+        var h = window.currentHls;
+        var bps = (h.bandwidthEstimate) ? h.bandwidthEstimate : (function(){
+          var lvl = h.currentLevel;
+          if (lvl>=0 && h.levels && h.levels[lvl]) return h.levels[lvl].bitrate || 0;
+          return 0;
+        })();
+        return { lib:'HLS.js', bitrate:bps };
+      }
+    } catch(e){}
+    return null;
+  }
+  function getDashStats(){
+    try {
+      if (window.currentDash) {
+        var p = window.currentDash;
+        var abr = p.getBitrateInfoListFor ? p.getBitrateInfoListFor('video') : null;
+        var q = p.getQualityFor ? p.getQualityFor('video') : null;
+        var bps = 0;
+        if (abr && q!=null && abr[q]) bps = (abr[q].bitrate || 0) * 1000;
+        return { lib:'dash.js', bitrate:bps };
+      }
+    } catch(e){}
+    return null;
+  }
+  function update(){
+    var w = video.videoWidth || 0, h = video.videoHeight || 0;
+    var fps = getFPS();
+    var buf = getBuffer();
+    var lib = '-', bitrate = 0;
+    var hs = getHLStats(); if (hs){ lib=hs.lib; bitrate=hs.bitrate; }
+    var ds = getDashStats(); if (ds){ lib=ds.lib; bitrate=ds.bitrate; }
+    var lines = [];
+    lines.push('🎛️  <span class="title">Stats player</span>');
+    lines.push('Lib: ' + lib);
+    lines.push('Résolution: ' + (w&&h ? (w+'×'+h) : '-'));
+    lines.push('FPS (approx): ' + (fps||'-'));
+    lines.push('Bitrate: ' + formatBitrate(bitrate));
+    lines.push('Buffer: ' + (buf>0 ? buf.toFixed(2)+' s' : '0 s'));
+    box.innerHTML = lines.join('<br>');
+  }
+  window.showStats = start; window.hideStats = stop;
+})();
+// Regroupe les boutons de la nowBar dans .nowbar-actions pour l'alignement à droite
+(() => {
+  const bar = document.getElementById('nowBar');
+  if (!bar) return;
+  let actions = bar.querySelector('.nowbar-actions');
+  if (!actions) {
+    actions = document.createElement('div');
+    actions.className = 'nowbar-actions';
+    // déplace tous les boutons/links vers la droite
+    const movers = Array.from(bar.querySelectorAll('button, a'));
+    bar.appendChild(actions);
+    movers.forEach(el => actions.appendChild(el));
+  }
+})();
+// Normalise la structure de la nowBar (titre à gauche, actions à droite)
+(function normalizeNowBar(){
+  var bar = document.getElementById('nowBar');
+  if (!bar) return;
+
+  // 1) Crée le conteneur des actions s’il manque
+  var actions = bar.querySelector('.nowbar-actions');
+  if (!actions) {
+    actions = document.createElement('div');
+    actions.className = 'nowbar-actions';
+    bar.appendChild(actions);
+  }
+
+  // 2) Assure un #nowTitle (créé si absent)
+  var title = document.getElementById('nowTitle');
+  if (!title) {
+    title = document.createElement('span');
+    title.id = 'nowTitle';
+    // Récupère un éventuel texte titre perdu dans la barre
+    var txt = '';
+    Array.prototype.slice.call(bar.childNodes).forEach(function(n){
+      if (n.nodeType === 3) txt += n.textContent.trim() + ' ';
+    });
+    if (txt.trim()) title.textContent = txt.trim();
+    // Insère le titre tout au début
+    bar.insertBefore(title, bar.firstChild);
+  }
+
+  // 3) Déplace tous les boutons/links dans .nowbar-actions (droite)
+  Array.prototype.slice.call(bar.querySelectorAll('button, a'))
+    .forEach(function(el){
+      if (!actions.contains(el)) actions.appendChild(el);
+    });
+
+  // 4) Empêche que d’autres styles re-forcent l’alignement
+  bar.style.setProperty('display','grid','important');
+})();
 
